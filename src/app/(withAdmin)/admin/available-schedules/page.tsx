@@ -1,0 +1,315 @@
+"use client";
+import { useRouter } from "next/navigation";
+import React, { useState, useEffect, useMemo } from "react";
+import toast from "react-hot-toast";
+import { motion } from "framer-motion";
+import { API_BASE } from "@/lib/config";
+import { authFetch } from "@/lib/http";
+import { fetchAllSchedules, NormalizedSchedule } from "@/app/utils/schedules";
+import { formatTimeToPeriod, formatPrettyDate } from "@/app/utils/time";
+
+const toEpochUTC00 = (ymd: string): number => (ymd ? Date.parse(`${ymd}T00:00:00Z`) : Number.NaN);
+
+const todayLocalYMD = (): string => {
+  const d = new Date();
+  const tzAdj = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+  return tzAdj.toISOString().slice(0, 10);
+};
+
+const formatTime = (time: string) => formatTimeToPeriod(time, "Invalid time");
+
+const formatScheduleDate = (startDate: string): string =>
+  formatPrettyDate(new Date(`${startDate}T00:00:00`));
+
+function AvailableSchedulesPage() {
+  const router = useRouter();
+
+  const [schedules, setSchedules] = useState<NormalizedSchedule[]>([]);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [schedulesPerPage, setSchedulesPerPage] = useState<number>(20);
+
+  // Filters
+  const [testTypeFilter, setTestTypeFilter] = useState<string>("");
+  const [scheduletestType, setscheduletestType] = useState<string>("");
+  const [dateSortOrder, setDateSortOrder] = useState<string>("ascending");
+  const [dateFilter, setDateFilter] = useState<string>("upcoming");
+  const [startDateFilter, setStartDateFilter] = useState<string>("");
+
+  const fetchSchedules = async () => {
+    try {
+      const normalized = await fetchAllSchedules(`${API_BASE}/api/v1/admin/get-schedules`);
+      // Admin only lists schedules that actually have bookable time slots.
+      setSchedules(normalized.filter((s) => s.timeSlots.length > 0));
+    } catch (err) {
+      console.error("Error fetching schedules:", err);
+      toast.error("Error fetching schedules");
+    }
+  };
+
+  useEffect(() => {
+    fetchSchedules();
+  }, []);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [testTypeFilter, scheduletestType, dateFilter, startDateFilter, schedulesPerPage]);
+
+  const filteredSchedules = useMemo(() => {
+    const today = todayLocalYMD();
+
+    return schedules.filter((s) => {
+      const scheduleDate = s.startDate;
+
+      const isCourseMatch = !testTypeFilter || s.name === testTypeFilter;
+      const isScheduleTypeMatch = !scheduletestType || s.testType === scheduletestType;
+      const isStartDateMatch = !startDateFilter || scheduleDate === startDateFilter;
+
+      let isDateMatch = true;
+      if (dateFilter === "past") isDateMatch = scheduleDate < today;
+      else if (dateFilter === "upcoming") isDateMatch = scheduleDate >= today;
+
+      return isCourseMatch && isScheduleTypeMatch && isDateMatch && isStartDateMatch;
+    });
+  }, [schedules, testTypeFilter, scheduletestType, dateFilter, startDateFilter]);
+
+  const sortedSchedules = useMemo(() => {
+    const dir = dateSortOrder === "ascending" ? 1 : -1;
+    return [...filteredSchedules].sort((a, b) => {
+      const ea = toEpochUTC00(a.startDate);
+      const eb = toEpochUTC00(b.startDate);
+      if (isNaN(ea) && isNaN(eb)) return 0;
+      if (isNaN(ea)) return 1;
+      if (isNaN(eb)) return -1;
+      return (ea - eb) * dir;
+    });
+  }, [filteredSchedules, dateSortOrder]);
+
+  const indexOfLast = currentPage * schedulesPerPage;
+  const indexOfFirst = indexOfLast - schedulesPerPage;
+  const currentSchedules = sortedSchedules.slice(indexOfFirst, indexOfLast);
+
+  const deleteSchedule = async (id: string) => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/v1/admin/delete-schedule/${id}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+      const result = await res.json();
+      if (!res.ok || !result?.success) {
+        throw new Error(result?.message || "Failed to delete schedule");
+      }
+      toast.success("Schedule deleted successfully");
+      setSchedules((prev) => prev.filter((sch) => String(sch._id ?? sch.id) !== id));
+    } catch (e: any) {
+      toast.error(e?.message || "Error deleting schedule");
+      console.error("Error deleting schedule:", e);
+    }
+  };
+
+  return (
+    <div className="p-1 sm:p-3 w-full sm:max-w-[100%] mx-auto bg-[#ffffff] text-[#00000f] shadow-1xl rounded-2xl border border-[#00000f]/10">
+      <motion.h1
+        className="text-2xl font-semibold mt-0 mb-0 text-[#00000f] p-1 rounded"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6, ease: "easeOut" }}
+      >
+        Available Schedules
+      </motion.h1>
+
+      <div className="bg-gray-100 p-2 h-22 mb-0 text-[#00000f]">
+        <h3><b>Filter by</b></h3>
+        <div className="my-4 flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4 text-sm">
+          <select
+            aria-label="Course type filter"
+            value={testTypeFilter}
+            onChange={(e) => setTestTypeFilter(e.target.value)}
+            className="px-2 py-1 border rounded w-full sm:w-auto"
+          >
+            <option value="">All Course Types</option>
+            <option value="GRE">GRE</option>
+            <option value="IELTS">IELTS</option>
+            <option value="TOEFL">TOEFL</option>
+            <option value="Pearson PTE">Pearson PTE</option>
+          </select>
+
+          <select
+            aria-label="Test type filter"
+            value={scheduletestType}
+            onChange={(e) => setscheduletestType(e.target.value)}
+            className="px-2 py-1 border rounded w-full sm:w-auto"
+          >
+            <option value="">All Test Types</option>
+            <option value="Paper-Based">Paper-Based</option>
+            <option value="Computer-Based">Computer-Based</option>
+          </select>
+
+          <select
+            aria-label="Date sort order"
+            value={dateSortOrder}
+            onChange={(e) => setDateSortOrder(e.target.value)}
+            className="px-2 py-1 border rounded w-full sm:w-auto"
+          >
+            <option value="ascending">Start Date Ascending</option>
+            <option value="descending">Start Date Descending</option>
+          </select>
+
+          <select
+            aria-label="Schedule date filter"
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
+            className="px-2 py-1 border rounded w-full sm:w-auto"
+          >
+            <option value="all">All Schedules</option>
+            <option value="past">Past</option>
+            <option value="upcoming">Upcoming</option>
+          </select>
+
+          <input
+            aria-label="Start date filter"
+            type="date"
+            value={startDateFilter}
+            onChange={(e) => setStartDateFilter(e.target.value)}
+            className="px-2 py-1 border rounded w-full sm:w-auto"
+          />
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="table-auto w-full border-collapse">
+          <thead>
+            <tr className="bg-[#face39]">
+              <th className="px-4 py-2 text-left">List</th>
+              <th className="px-4 py-2 text-left">Name</th>
+              <th className="px-4 py-2 text-left">Test Type</th>
+              <th className="px-4 py-2 text-left">Exam Date</th>
+              <th className="px-4 py-2 text-left">Exam Time</th>
+              <th className="px-4 py-2 text-left">Total Seats</th>
+              <th className="px-4 py-2 text-left">Available Seats</th>
+              <th className="px-4 py-2 text-left">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {currentSchedules.map((schedule, idx) => (
+              <tr key={String(schedule._id ?? schedule.id)} className="border-b">
+                <td className="px-4 py-2 text-sm">{indexOfFirst + idx + 1}</td>
+                <td className="px-4 py-2">{schedule.name}</td>
+                <td className="px-4 py-2">{schedule.testType}</td>
+                <td className="px-4 py-2">
+                  {formatScheduleDate(schedule.startDate)}
+                </td>
+                <td className="px-4 py-2">
+                  {Array.isArray(schedule.timeSlots) && schedule.timeSlots.length > 0 ? (
+                    schedule.timeSlots.map((slot) => (
+                      <div key={slot.slotId}>
+                        {formatTime(slot.startTime)} - {formatTime(slot.endTime)}
+                      </div>
+                    ))
+                  ) : (
+                    <span>N/A</span>
+                  )}
+                </td>
+                <td className="px-4 py-2">{schedule.timeSlots?.[0]?.totalSlot ?? "N/A"}</td>
+                <td className="px-4 py-2">{schedule.timeSlots?.[0]?.slot ?? "N/A"}</td>
+                <td className="px-4 py-2 flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-6">
+                  <button
+                    onClick={() => router.push(`/admin/${schedule._id ?? schedule.id}`)}
+                    className="px-3 py-1 bg-[#00000f] text-white rounded font-medium shadow-sm hover:bg-[#face39] hover:text-[#00000f] hover:font-semibold hover:shadow-md hover:scale-105 transition-all duration-300 ease-in-out"
+                  >
+                    View Bookings
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      toast(
+                        (t) => (
+                          <div className="bg-gray-100 p-4 rounded shadow-lg text-black">
+                            <p className="text-sm">
+                              Are you sure you want to delete the schedule on{" "}
+                              {formatScheduleDate(schedule.startDate)}
+                              ?
+                            </p>
+                            <div className="mt-4 flex justify-center gap-4">
+                              <button
+                                className="px-4 py-2 bg-green-500 hover:bg-green-700 text-white font-bold rounded-lg"
+                                onClick={() => {
+                                  deleteSchedule(String(schedule._id ?? schedule.id));
+                                  toast.dismiss(t.id);
+                                }}
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                className="px-4 py-2 bg-red-500 hover:bg-red-700 text-white font-semibold rounded-lg"
+                                onClick={() => toast.dismiss(t.id)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ),
+                        { id: `delete-${schedule._id ?? schedule.id}`, duration: 5000 }
+                      )
+                    }
+                    className="px-4 py-2 bg-red-500 text-white font-semibold rounded-lg hover:bg-red-600"
+                  >
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+
+            {currentSchedules.length === 0 && (
+              <tr>
+                <td className="px-4 py-6 text-center text-sm text-gray-600" colSpan={8}>
+                  No schedules match your filters.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex flex-col sm:flex-row justify-between items-center mt-4 space-y-4 sm:space-y-0">
+        <div>
+          <label htmlFor="schedulesPerPage" className="mr-2">Schedules per page:</label>
+          <select
+            id="schedulesPerPage"
+            value={schedulesPerPage}
+            onChange={(e) => setSchedulesPerPage(Number(e.target.value))}
+            className="px-2 py-1 border rounded"
+          >
+            <option value={5}>5</option>
+            <option value={10}>10</option>
+            <option value={20}>20</option>
+            <option value={30}>30</option>
+          </select>
+        </div>
+
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+            disabled={currentPage === 1}
+            className="px-2 py-1 bg-gray-300 rounded hover:bg-gray-400 disabled:opacity-50"
+          >
+            Previous
+          </button>
+          <span className="mx-2">
+            Page {currentPage} / {Math.max(1, Math.ceil(filteredSchedules.length / schedulesPerPage))}
+          </span>
+          <button
+            onClick={() => setCurrentPage((p) => (indexOfLast >= filteredSchedules.length ? p : p + 1))}
+            disabled={indexOfLast >= filteredSchedules.length}
+            className="px-2 py-1 bg-gray-300 rounded hover:bg-gray-400 disabled:opacity-50"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default AvailableSchedulesPage;

@@ -1,0 +1,863 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Calendar from "react-calendar";
+import "react-calendar/dist/Calendar.css";
+import axios from "axios";
+import http from "@/lib/http";
+import { MdOutlinePersonOutline } from "react-icons/md";
+import { getUserIdOnlyFromToken } from "@/app/helpers/jwt";
+import { useRouter, useSearchParams } from "next/navigation";
+import toast from "react-hot-toast";
+import "./calendarStyles.css";
+import { motion } from "framer-motion";
+import { API_BASE } from "@/lib/config";
+import { homeBasedCourses } from "@/lib/courseConfig";
+import { normalizeScheduleRow } from "@/app/utils/schedules";
+
+// --- Types ---
+type ValuePiece = Date | null;
+type Value = ValuePiece | [ValuePiece, ValuePiece];
+
+type TimeSlot = {
+  slotId: string;
+  startTime: string;
+  endTime: string;
+  slot: number;
+};
+
+type Schedule = {
+  _id: string;
+  courseId: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  timeSlots: TimeSlot[];
+  testSystem: string;
+  testType: string;
+  status: string;
+};
+
+type Booking = {
+  _id: string;
+  name: string;
+  scheduleId?: string;
+  bookingDate: string;
+};
+
+// --- Component ---
+const BookingId = ({ params }: { params: { bookingId: string } }) => {
+  const [value, onChange] = useState<Value>(new Date());
+  const [testType, setTestType] = useState<string>("");
+  const [testSystem, setTestSystem] = useState<string>("");
+  const [scheduleData, setScheduleData] = useState<Schedule[]>([]);
+  const [scheduleId, setScheduleId] = useState<string | null>(null);
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userStatus, setUserStatus] = useState<string | null>(null);
+  const [userTestType, setUserTestType] = useState<string | null>(null);
+  const [userMockType, setUserMockType] = useState<string | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<string>("");
+  const [availableDates, setAvailableDates] = useState<string[]>([]);
+  const [userMocks, setUserMocks] = useState<
+    { mockType: string; mock: number; testType?: string; testSystem?: string }[]
+  >([]);
+  const [existingBookings, setExistingBookings] = useState<Booking[]>([]);
+  const [mounted, setMounted] = useState(false);
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const oldBookingId = searchParams.get("oldBookingId");
+
+  const courses = [
+    { _id: "67337c880794d577cd982b75", name: "IELTS" },
+    { _id: "67337c880794d577cd982b76", name: "Pearson PTE" },
+    { _id: "67337c880794d577cd982b77", name: "GRE" },
+    { _id: "67337c880794d577cd982b78", name: "TOEFL" },
+  ];
+
+  const courseName =
+    courses.find((c) => c._id === params.bookingId)?.name || "Unknown Course";
+
+  const testSystemOptions: Record<string, string[]> = {
+    IELTS: ["Academic", "General Training"],
+    "Pearson PTE": ["AIWAS", "TCY"],
+    TOEFL: ["TCY"],
+    GRE: ["PowerPrep", "TCY"],
+  };
+
+  const availableTestSystems = testSystemOptions[courseName] || [];
+
+  // --- helpers ---
+  const isComputer = userTestType === "Computer-Based";
+  // Home is a course-level policy (see homeBasedCourses); GRE/TOEFL are excluded.
+  const isHomeEligibleCourse = homeBasedCourses[courseName] === true;
+  // For a Computer-Based, non-Home-eligible course, Test Center is the only real
+  // choice. This is the single source of truth for "current location" used by
+  // every read site (dropdown value, calendar/legend visibility, schedule fetch,
+  // proceed validation, booking payload) — selectedLocation itself is only ever
+  // set by the user's manual dropdown choice, never forced.
+  const effectiveLocation =
+    isComputer && !isHomeEligibleCourse ? "Test Center" : selectedLocation;
+  const isHome = isComputer && effectiveLocation === "Home";
+  const isCenter = isComputer && effectiveLocation === "Test Center";
+  const isPaper = userTestType !== "Computer-Based";
+
+  const canProceed = useMemo(() => {
+    if (isHome) {
+      // Home → need date + manual time input
+      return Boolean(selectedSlotId && value instanceof Date);
+    }
+    if (isCenter || isPaper) {
+      // TC or Paper → need selected slot & schedule
+      return Boolean(selectedSlotId && scheduleId);
+    }
+    return false;
+  }, [isHome, isCenter, isPaper, selectedSlotId, scheduleId, value]);
+
+  useEffect(() => { setMounted(true); }, []);
+
+  // For a Computer-Based course that isn't Home-eligible, Test Center is the
+  // only real choice. effectiveLocation above already treats it as selected on
+  // every render-time read site (dropdown, calendar, fetch, validation), so
+  // this doesn't cause the old one-paint "select a location" flash — but
+  // selectedLocation itself is still synced here (not left stale) so that
+  // handleProceed's raw-state defense-in-depth guard below can't be fooled by
+  // a leftover "Home" value from a previous course. Also clears any slot/
+  // schedule picked while that previous (Home-eligible) course was selected.
+  useEffect(() => {
+    if (isComputer && !isHomeEligibleCourse && selectedLocation !== "Test Center") {
+      setSelectedLocation("Test Center");
+      setSelectedSlotId(null);
+      setScheduleId(null);
+    }
+  }, [isComputer, isHomeEligibleCourse, selectedLocation]);
+
+  // Highlight which days of the visible month have schedules for this course.
+  // Uses the PUBLIC course-schedules endpoint (same auth as the per-day route,
+  // NOT the admin get-schedules route). Fails silently: until that backend
+  // route exists it just highlights nothing — no console noise.
+  const fetchAvailableDatesForMonth = async (year: number, month: number) => {
+    try {
+      const monthParam = `${year}-${String(month + 1).padStart(2, "0")}`;
+      const res = await http.get(
+        `${API_BASE}/api/v1/schedule/course/${params.bookingId}`,
+        { params: { month: monthParam } }
+      );
+      const raw: any[] = Array.isArray(res.data)
+        ? res.data
+        : Array.isArray(res.data?.schedules)
+        ? res.data.schedules
+        : [];
+
+      const dates = raw
+        .filter((s: any) => {
+          if (!s?.startDate) return false;
+          const d = new Date(s.startDate);
+          return d.getFullYear() === year && d.getMonth() === month;
+        })
+        .map((s: any) => new Date(s.startDate).toDateString());
+
+      setAvailableDates(Array.from(new Set(dates)));
+    } catch (error: any) {
+      // A 404 means the backend route isn't deployed yet → expected, stay quiet.
+      // Any other error is a real failure worth surfacing so a broken endpoint
+      // doesn't silently stop highlighting dates (matches fetchUser above).
+      if (!axios.isCancel(error) && error?.response?.status !== 404) {
+        console.error("Error fetching available dates for month:", error);
+      }
+      setAvailableDates([]);
+    }
+  };
+
+  // ---- Load user (matches backend: GET /api/v1/user/:userId ; there is NO GET /user/status/:id)
+  useEffect(() => {
+    const fetchUser = async () => {
+      const id = getUserIdOnlyFromToken();
+      if (!id) return;
+      setUserId(id);
+
+      try {
+        const res = await http.get(`${API_BASE}/api/v1/user/${id}`);
+        const data = res.data;
+
+        const mocks = data?.mocks || [];
+        setUserMocks(mocks);
+
+        // prefer the mock that matches the course; fallback to lastMock fields
+        const matchingMock = mocks.find(
+          (m: { mockType: string }) => m.mockType === courseName
+        );
+
+        if (matchingMock) {
+          setUserMockType(matchingMock.mockType);
+          setUserTestType(matchingMock.testType || null);
+          setTestSystem(matchingMock.testSystem || "");
+        } else if (data?.user?.mockType === courseName) {
+          setUserMockType(data.user.mockType);
+          setUserTestType(data.user.testType || null);
+          setTestSystem(data.user.testSystem || "");
+        } else {
+          setUserMockType("N/A");
+          setUserTestType(data?.user?.testType || "N/A");
+          setTestSystem("");
+        }
+
+        setUserStatus(data?.user?.status || null);
+
+        // user bookings (matches backend: GET /api/v1/user/bookings/:userId)
+        const bookingsRes = await http.get(
+          `${API_BASE}/api/v1/user/bookings/${id}`
+        );
+        setExistingBookings(bookingsRes.data.bookings || []);
+      } catch (error: any) {
+        // If the route isn't available locally, continue with safe defaults
+        const status = error?.response?.status;
+        if (status !== 404) {
+          console.error("Error fetching user or bookings", error);
+        }
+        setUserStatus(null);
+        setUserMocks([]);
+        setExistingBookings([]);
+      }
+    };
+
+    fetchUser();
+  }, [courseName]);
+
+  // initial available dates for the current month (skip for Home bookings)
+  useEffect(() => {
+    if (isHome) { setAvailableDates([]); return; }
+    const now = new Date();
+    void fetchAvailableDatesForMonth(now.getFullYear(), now.getMonth());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.bookingId, isHome]);
+
+  // fetch per-day schedules (NOT for Home; backend has no /schedule/Home/:courseId)
+  useEffect(() => {
+    if (!(value instanceof Date)) return;
+    if (!userTestType || userTestType === "N/A") return; // wait for user data
+    if (isHome) {
+      setScheduleData([]);
+      return;
+    }
+    if (isComputer && !effectiveLocation) return; // wait for location selection
+
+    const controller = new AbortController();
+
+    const fetchScheduleData = async (selectedDate: Date) => {
+      try {
+        const formattedDate = selectedDate.toLocaleDateString("en-CA");
+
+        const response = await http.get(
+          `${API_BASE}/api/v1/schedule/${formattedDate}/${params.bookingId}`,
+          { signal: controller.signal }
+        );
+
+        const rawSchedules = Array.isArray(response?.data)
+          ? response.data
+          : Array.isArray(response?.data?.schedules)
+          ? response.data.schedules
+          : [];
+        const normalizedSchedules = rawSchedules
+          .map((row: any) => normalizeScheduleRow(row))
+          .filter(Boolean)
+          .map((schedule: any) => ({
+            ...schedule,
+            courseId: schedule.courseId ?? "",
+            endDate: schedule.endDate ?? schedule.startDate,
+            testSystem: schedule.testSystem ?? "",
+          })) as Schedule[];
+
+        setScheduleData(normalizedSchedules);
+      } catch (error: any) {
+        if (!axios.isCancel(error)) {
+          console.error("Error fetching schedule data:", error);
+          setScheduleData([]);
+        }
+      }
+    };
+
+    fetchScheduleData(value);
+    return () => controller.abort();
+  }, [value, isHome, isComputer, effectiveLocation, userTestType, params.bookingId]);
+
+  const handleSlotSelect = (slotId: string, scheduleId: string, testType: string) => {
+    setSelectedSlotId(slotId);
+    setScheduleId(scheduleId);
+    setTestType(testType);
+  };
+
+  const handleProceed = async () => {
+    // If a selection field is shown (IELTS), backend requires testSystem
+    if (availableTestSystems.length > 0 && !testSystem.trim()) {
+      toast.error("Please select a test system.");
+      return;
+    }
+
+    if (userTestType === "Computer-Based" && !effectiveLocation) {
+      toast.error("Please select a location (Home or Test Center).");
+      return;
+    }
+
+    // Course-level guard: block a stale/forced Home selection for courses that
+    // are not Home-eligible (defense-in-depth; the UI already hides the option).
+    if (selectedLocation === "Home" && !(isComputer && isHomeEligibleCourse)) {
+      toast.error("Home-Based testing is not available for this course.");
+      return;
+    }
+
+    if (!userId) {
+      toast.error("User ID is missing.");
+      return;
+    }
+
+    if (userStatus?.toLowerCase() !== "completed") {
+      toast.error("Booking is only available for users with completed status.");
+      return;
+    }
+
+    // Rescheduling guard: can only reschedule same course
+    if (oldBookingId) {
+      const oldBooking = existingBookings.find((b) => b._id === oldBookingId);
+      if (!oldBooking) {
+        toast.error("Old booking not found.");
+        return;
+      }
+      if (oldBooking.name !== courseName) {
+        toast.error(
+          `You can only reschedule your ${oldBooking.name} mock, not ${courseName}.`
+        );
+        return;
+      }
+    }
+
+    const bookingPayload: any = {
+      userId,
+      location: effectiveLocation || "Test Center",
+      status: "pending",
+      name: courseName,
+      testType: userTestType || "Unknown",
+      testSystem,
+      bookingDate: value instanceof Date ? value.toLocaleDateString("en-CA") : "",
+    };
+
+    const now = new Date();
+
+    // --- HOME booking (no scheduleId/slotId; backend expects bookingDate + testTime)
+    if (isHome) {
+      if (!(value instanceof Date)) {
+        toast.error("Please select a booking date.");
+        return;
+      }
+      if (!selectedSlotId) {
+        toast.error("Please select a test time.");
+        return;
+      }
+
+      const selectedDateTime = new Date(
+        `${value.toLocaleDateString("en-CA")}T${selectedSlotId}`
+      );
+      const timeDifferenceInHours =
+        (selectedDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+      if (timeDifferenceInHours < 24) {
+        toast.error(
+          "Bookings must be made at least 24 hours in advance for home test."
+        );
+        return;
+      }
+
+      try {
+        await http.post(`${API_BASE}/api/v1/user/book-slot`, {
+          ...bookingPayload,
+          testTime: selectedSlotId,
+        });
+
+        if (oldBookingId) {
+          await http.delete(
+            `${API_BASE}/api/v1/bookings/${oldBookingId}`
+          );
+          toast.success("Rescheduled successfully! 🎯");
+        } else {
+          toast.success("Home test booked successfully! 🏡");
+        }
+
+        await new Promise((r) => setTimeout(r, 1200));
+        router.push(`/dashboard`);
+      } catch (error: any) {
+        const errorMessage =
+          error.response?.data?.message || "An unexpected error occurred.";
+
+        if (
+          oldBookingId &&
+          (errorMessage.includes("Insufficient mock tests") ||
+            errorMessage.includes("Insufficient mock"))
+        ) {
+          try {
+            await http.delete(
+              `${API_BASE}/api/v1/bookings/${oldBookingId}`
+            );
+            await http.post(`${API_BASE}/api/v1/user/book-slot`, {
+              ...bookingPayload,
+              testTime: selectedSlotId,
+            });
+
+            toast.success("Rescheduled successfully after adjusting mocks! 🎯");
+            await new Promise((r) => setTimeout(r, 1200));
+            router.push(`/dashboard`);
+          } catch (secondError: any) {
+            toast.error(
+              secondError.response?.data?.message || "Error after retrying booking."
+            );
+          }
+        } else {
+          toast.error(errorMessage);
+        }
+      }
+      return;
+    }
+
+    // --- TEST CENTER / PAPER booking (requires scheduleId & slotId)
+    if (!selectedSlotId || !scheduleId) {
+      toast.error("Please select a valid slot to proceed.");
+      return;
+    }
+
+    try {
+      const selectedSchedule = scheduleData.find((s) => s._id === scheduleId);
+      const selectedSlot = selectedSchedule?.timeSlots.find(
+        (slot) => slot.slotId === selectedSlotId
+      );
+
+      if (!selectedSlot) {
+        toast.error("Slot details could not be retrieved.");
+        return;
+      }
+
+      const slotStartDateTime = new Date(
+        `${(value as Date).toLocaleDateString("en-CA")}T${selectedSlot.startTime}`
+      );
+      const timeDifferenceInHours =
+        (slotStartDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+      if (timeDifferenceInHours < 24) {
+        toast.error("Bookings cannot be made less than 24 hours before.");
+        return;
+      }
+
+      // Backend requires testSystem if the selection was shown (IELTS branch handled above)
+      await http.post(`${API_BASE}/api/v1/user/book-slot`, {
+        ...bookingPayload,
+        scheduleId,
+        slotId: selectedSlotId,
+      });
+
+      if (oldBookingId) {
+        await http.delete(`${API_BASE}/api/v1/bookings/${oldBookingId}`);
+        toast.success("Rescheduled successfully! 🎯");
+      } else {
+        toast.success("Test Center booking successful! 🏢");
+      }
+
+      await new Promise((r) => setTimeout(r, 1200));
+      router.push(`/dashboard`);
+    } catch (error: any) {
+      const errorMessage =
+        error.response?.data?.message || "An unexpected error occurred.";
+
+      if (
+        oldBookingId &&
+        (errorMessage.includes("Insufficient mock tests") ||
+          errorMessage.includes("Insufficient mock"))
+      ) {
+        try {
+          await http.delete(
+            `${API_BASE}/api/v1/bookings/${oldBookingId}`
+          );
+          await http.post(`${API_BASE}/api/v1/user/book-slot`, {
+            ...bookingPayload,
+            scheduleId,
+            slotId: selectedSlotId,
+          });
+
+          toast.success("Rescheduled successfully after adjusting mocks! 🎯");
+          await new Promise((r) => setTimeout(r, 1200));
+          router.push(`/dashboard`);
+        } catch (secondError: any) {
+          toast.error(
+            secondError.response?.data?.message || "Error after retrying booking."
+          );
+        }
+      } else {
+        toast.error(
+          errorMessage.includes("already booked")
+            ? "You already have booked a test for the selected date."
+            : errorMessage
+        );
+      }
+    }
+  };
+
+  return (
+    <div className="p-1 sm:p-2 w-full sm:max-w-[100%] mx-auto bg-[#ffffff] text-[#00000f] shadow-1xl  rounded-2xl border border-[#00000f]/10">
+      <div className="w-full max-w-5xl mx-auto px-0">
+        {/* Title Section */}
+        <div className="w-full flex justify-center mt-[8px] lg:mt-6 text-[#00000f]">
+          <motion.div
+            className="flex flex-col text-center items-center gap-2"
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, ease: "easeOut" }}
+          >
+            <h2 className="text-lg md:text-xl lg:text-3xl font-semibold text-[#00000f]">
+              Please Select Your{" "}
+              <span className="bg-[#f7cb37] text-[#00000f] font-bold text-lg md:text-xl lg:text-3xl px-2 py-1 rounded-lg">
+                {courseName}
+              </span>
+            </h2>
+
+            <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-[#00000f]">
+              Mock Test Date and Time
+            </h1>
+
+            <div className="h-[6px] w-24 bg-[#f7cb37] rounded-full mt-1 mb-2 " />
+          </motion.div>
+        </div>
+
+        {/* Test Type and Test System Selection */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 mb-2 w-full">
+          {/* Test Type */}
+          <div className="w-full flex flex-col items-start">
+            <label htmlFor="testType" className="block mb-0 font-medium text-[#00000f]">
+              Test Type
+            </label>
+
+            {courseName === "IELTS" ? (
+              (() => {
+                const userTestTypesForMock = userMocks
+                  .filter((m) => m.mockType === "IELTS")
+                  .map((m) => (m as any).testType || "N/A");
+                const uniqueTestTypes = Array.from(new Set(userTestTypesForMock));
+
+                if (uniqueTestTypes.length > 1) {
+                  // Editable when multiple options
+                  return (
+                    <select
+                      className="select select-bordered bg-[#FACE39] text-[#00000f] w-full"
+                      value={userTestType || ""}
+                      onChange={(e) => setUserTestType(e.target.value)}
+                      aria-label="Test type"
+                    >
+                      <option value="">Select Test Type</option>
+                      {uniqueTestTypes.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                } else {
+                  // Read-only look, but uncontrolled (no React warning)
+                  return (
+                    <select
+                      className="select select-bordered bg-[#FACE39] text-[#00000f] w-full appearance-none pointer-events-none"
+                      defaultValue={userTestType || ""}
+                      aria-readonly="true"
+                      aria-label="Test type"
+                    >
+                      <option value={userTestType || ""}>
+                        {userTestType || "N/A"}
+                      </option>
+                    </select>
+                  );
+                }
+              })()
+            ) : (
+              // Non-IELTS: read-only, uncontrolled (no warning)
+              <select
+                className="select select-bordered bg-[#FACE39] text-[#00000f] w-full appearance-none pointer-events-none"
+                defaultValue={userTestType || ""}
+                aria-readonly="true"
+                aria-label="Test type"
+              >
+                <option value={userTestType || ""}>{userTestType || "N/A"}</option>
+              </select>
+            )}
+          </div>
+
+          {/* Test System */}
+          <div className="w-full flex flex-col items-start text-[#00000f]">
+            <label htmlFor="testSystem" className="block mb-0 font-medium">
+              Test System {courseName === "IELTS" ? <span className="text-red-500">*</span> : null}
+            </label>
+
+            {courseName === "IELTS" ? (
+              <select
+                id="testSystem"
+                className="select select-bordered bg-[#FACE39] text-black w-full"
+                value={testSystem}
+                onChange={(e) => setTestSystem(e.target.value)}
+              >
+                <option value="">Select Test System</option>
+                {availableTestSystems.map((system) => (
+                  <option key={system} value={system}>
+                    {system}
+                  </option>
+                ))}
+              </select>
+            ) : testSystem ? (
+              // read-only, uncontrolled (no fake onChange)
+              <select
+                id="testSystem"
+                className="select select-bordered bg-[#FACE39] text-black w-full appearance-none pointer-events-none"
+                defaultValue={testSystem}
+                aria-readonly="true"
+              >
+                <option value={testSystem}>{testSystem}</option>
+              </select>
+            ) : (
+              // if nothing present but field is visible, allow choosing from course defaults (if any)
+              <select
+                id="testSystem"
+                className="select select-bordered bg-[#FACE39] text-black w-full"
+                value={testSystem}
+                onChange={(e) => setTestSystem(e.target.value)}
+              >
+                <option value="">Select Test System</option>
+                {availableTestSystems.map((system) => (
+                  <option key={system} value={system}>
+                    {system}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+
+        {/* Test Location (for Computer-Based) */}
+        {isComputer && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 mb-2 w-full">
+            <div className="w-full flex flex-col items-start">
+              <label htmlFor="location" className="block mb-0 font-medium text-[#00000f]">
+                Test Location
+              </label>
+              <select
+                id="location"
+                className="select select-bordered bg-[#FACE39] text-black w-full"
+                value={effectiveLocation}
+                onChange={(e) => {
+                  setSelectedLocation(e.target.value);
+                  // Clear previously selected slot/schedule when location changes
+                  setSelectedSlotId(null);
+                  setScheduleId(null);
+                }}
+              >
+                <option value="" disabled>
+                  Select Location
+                </option>
+                {isHomeEligibleCourse && <option value="Home">Home</option>}
+                <option value="Test Center">Test Center</option>
+              </select>
+            </div>
+
+            {/* Test Time for Home */}
+            {effectiveLocation === "Home" && (
+              <div className="w-full flex flex-col items-start">
+                <label htmlFor="testTime" className="block mb-0 font-medium">
+                  Test Time <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="testTime"
+                  type="time"
+                  className="input input-bordered bg-[#FACE39] text-black w-full"
+                  value={selectedSlotId || ""}
+                  onChange={(e) => setSelectedSlotId(e.target.value)}
+                  required
+                />
+                {!selectedSlotId && (
+                  <p className="text-red-500 text-base mt-1">Test Time is required.</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Calendar + Slot Selection */}
+        {userTestType !== "Computer-Based" || (userTestType === "Computer-Based" && effectiveLocation) ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 mt-2 gap-14 mx-auto">
+            {/* Calendar */}
+            <div className="w-full max-w-md mx-auto rounded-lg shadow border border-gray-200 p-8 pb-0 bg-white ">
+              {mounted && (
+                <Calendar
+                  onChange={onChange}
+                  value={value}
+                  minDate={new Date()}
+                  onActiveStartDateChange={({ activeStartDate }) => {
+                    if (!activeStartDate) return;
+                    if (isHome) { setAvailableDates([]); return; }
+                    const d = activeStartDate as Date;
+                    void fetchAvailableDatesForMonth(d.getFullYear(), d.getMonth());
+                  }}
+                  tileClassName={({ date, view }) => {
+                    if (view !== "month") return null;
+
+                    const dateStr = date.toDateString();
+                    const selectedStr =
+                      value instanceof Date ? value.toDateString() : "";
+
+                    if (dateStr === selectedStr) return "selected-date";
+                    if (availableDates.includes(dateStr)) return "available-date";
+                    return null;
+                  }}
+                />
+              )}
+
+              {/* Legend for Test Center / Paper */}
+              {(userTestType === "Paper-Based" ||
+                (userTestType === "Computer-Based" &&
+                  effectiveLocation === "Test Center")) && (
+                <div className="flex gap-6 mt-2 text-sm">
+                  <div className="flex items-center gap-1">
+                    <div className="w-4 h-4 border-2 border-[#FACE39] bg-[#FEF6D9]"></div>
+                    <span>Available dates</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-4 h-4 bg-[#FACE39]"></div>
+                    <span>Selected date</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-4 h-4 bg-[#00000f]"></div>
+                    <span>Today</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Slots */}
+            <div className="mt-8 w-full mx-auto">
+              {scheduleData.length > 0 ? (
+                <>
+                  {scheduleData
+                    .filter(
+                      (schedule) =>
+                        schedule.testType === userTestType &&
+                        schedule.name === userMockType
+                    )
+                    .map((schedule) => (
+                      <div
+                        key={schedule._id}
+                        className="w-full grid grid-cols-1 md:grid-cols-2 gap-4 mt-2"
+                      >
+                        {schedule.timeSlots.map((slot) => {
+                          const isSelected = selectedSlotId === slot.slotId;
+                          return (
+                            <div
+                              key={slot.slotId}
+                              onClick={() =>
+                                handleSlotSelect(
+                                  slot.slotId,
+                                  schedule._id,
+                                  schedule.testType
+                                )
+                              }
+                              className={`
+                                mt-2 w-full px-4 py-4 rounded-xl cursor-pointer transition-all duration-300
+                                ${isSelected ? "bg-yellow-300 shadow-md scale-[1.01]" : "bg-gray-100"}
+                                hover:bg-[#FACE39] hover:shadow-lg
+                              `}
+                            >
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <h3 className="text-base font-bold text-[#00000f]">
+                                    {slot.startTime.slice(0, 5)}
+                                    <p className="text-xs text-[#00000f] font-medium">Start</p>
+                                  </h3>
+                                </div>
+                                <div>
+                                  <h3 className="text-base font-bold text-[#00000f]">
+                                    {slot.endTime.slice(0, 5)}
+                                    <p className="text-xs text-[#00000f] font-medium">End</p>
+                                  </h3>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1 mt-0 text-sm text-[#00000f]">
+                                <MdOutlinePersonOutline className="text-lg" />
+                                <span className="font-medium">Available Seats:</span>
+                                <span className="font-bold">{slot.slot}</span>
+                              </div>
+
+                              <h4 className="text-sm font-medium mt-2 text-[#00000f]">
+                                Test Type:{" "}
+                                <span className="font-bold text-[#00000f]">
+                                  {schedule.testType}
+                                </span>
+                              </h4>
+                              <h4 className="text-sm font-medium mt-1 text-[#00000f]">
+                                Course:{" "}
+                                <span className="font-bold text-[#00000f]">
+                                  {schedule.name}
+                                </span>
+                              </h4>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                </>
+              ) : (
+                <p className="text-base font-medium text-[#00000f] mt-0">
+                  {effectiveLocation === "Home"
+                    ? "You can choose any date for home-based booking. Select your date and test time, then click Proceed."
+                    : "No schedules available for this date."}
+                </p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="my-4">
+            <p className="text-lg font-medium text-[#00000f]">
+              Please select a location to view available schedules.
+            </p>
+          </div>
+        )}
+
+        {/* Proceed Button */}
+        <div className="w-full flex justify-end mt-6 mb-4">
+          <button
+            type="button"
+            disabled={!canProceed}
+            onClick={handleProceed}
+            className={`
+              group relative inline-flex items-center justify-center px-10 py-3 rounded-full font-semibold text-base uppercase tracking-wide transition-all duration-300 ease-in-out
+              ${
+                canProceed
+                  ? `
+                bg-[#facc15] text-[#00000f] 
+                shadow-[0_8px_24px_rgba(250,204,21,0.4)]
+                hover:bg-[#00000f] hover:text-[#facc15] hover:shadow-[0_10px_30px_rgba(0,0,0,0.4)] hover:scale-[1.04]
+                focus:bg-[#00000f] focus:text-[#facc15] focus:shadow-[0_10px_30px_rgba(0,0,0,0.4)] focus:scale-[1.04]
+                active:bg-[#00000f] active:text-[#facc15] active:scale-[0.97]
+                focus:outline-none focus:ring-4 focus:ring-[#facc15]/50
+              `
+                  : "bg-gray-300 text-gray-500 cursor-not-allowed"
+              }
+            `}
+          >
+            <span className="z-10">Proceed</span>
+            {canProceed && (
+              <span
+                className="absolute inset-0 rounded-full ring-2 ring-[#FACE39] opacity-0 
+                group-hover:opacity-100 group-focus:opacity-100 group-active:opacity-100 
+                transition-opacity duration-300 pointer-events-none"
+              />
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default BookingId;
