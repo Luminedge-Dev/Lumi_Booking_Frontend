@@ -8,6 +8,6 @@ export const logout = async () => {
   // Clear cookies using js-cookie
   Cookies.remove('accessToken');
 
-  // Redirect to login on the primary domain
-  await signOut({ callbackUrl: "https://luminedge.io/login" });
+  // Stay on whatever host is serving this deployment.
+  await signOut({ callbackUrl: "/login" });
 };
