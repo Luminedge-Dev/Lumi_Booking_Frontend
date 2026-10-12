@@ -12,6 +12,7 @@ export const TEACHER_EMAIL_MAP: Record<string, string> = {
   Sazzadur: "sazzadur.luminedge@gmail.com",
   Sadman: "salim.sadman.luminedge@gmail.com",
   Juthi: "juthiluminedge@gmail.com",
+  // Arnab: "adidey244@gmail.com",
   // Rahul: "rahul1921@cseku.ac.bd",
 };
 
@@ -49,6 +50,7 @@ export const TEACHER_COLOR_MAP: Record<string, string> = {
   Mubasshira: "bg-rose-600 text-white",
   Sadman: "bg-orange-600 text-white",
   Juthi: "bg-violet-600 text-white",
+  // Arnab: "bg-gray-600 text-white",
   // Rahul: "bg-teal-600 text-white" / "bg-gray-600 text-white",
 };
 
