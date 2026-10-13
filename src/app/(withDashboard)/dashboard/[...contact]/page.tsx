@@ -1,11 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
+import { use, useState, useEffect } from "react";
 import toast from "react-hot-toast";
 import GetMe from "@/hooks/useUser";
 
-const CoursesPage = ({ params }: { params: { contact: string } }) => {
+const CoursesPage = ({ params: paramsPromise }: { params: Promise<{ contact: string[] }> }) => {
+  const params = use(paramsPromise);
   const user = GetMe();
   const { contact: bookingId } = params || {};
   const router = useRouter();
@@ -67,6 +68,7 @@ const CoursesPage = ({ params }: { params: { contact: string } }) => {
         <ul className="list-disc list-inside ml-3 sm:ml-4">
           <li className="mb-1 sm:mb-1">
             <strong>Test Date and Time:</strong> Check the exact schedule of your mock test from the <span>&nbsp;</span>
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/dashboard" className="text-[#FACE39] underline text-lg">Dashboard</a>.
           </li>
           <li className="mb-1 sm:mb-1"><strong>Venue Information:</strong> Level 12, Gawsia Twin Peak, 743 Satmasjid Road, Dhanmondi 9/A, Dhaka-1205, Bangladesh.</li>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Calendar from "react-calendar";
 import "react-calendar/dist/Calendar.css";
 import axios from "axios";
@@ -46,7 +46,8 @@ type Booking = {
 };
 
 // --- Component ---
-const BookingId = ({ params }: { params: { bookingId: string } }) => {
+const BookingId = ({ params: paramsPromise }: { params: Promise<{ bookingId: string }> }) => {
+  const params = use(paramsPromise);
   const [value, onChange] = useState<Value>(new Date());
   const [testType, setTestType] = useState<string>("");
   const [testSystem, setTestSystem] = useState<string>("");

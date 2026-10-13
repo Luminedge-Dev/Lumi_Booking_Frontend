@@ -7,7 +7,9 @@ import axios from "axios";
 import { API_BASE } from "@/lib/config";
 import GetMe from "@/hooks/useUser";
 
-const CoursesPage = ({ params }: { params: { contact: string } }) => {
+const CoursesPage = ({ params }: { params?: Promise<Record<string, never>> }) => {
+  // Pre-existing: this is a static route, so `contact` is always undefined here.
+  const contact = (params as unknown as { contact?: string } | undefined)?.contact;
   const user = GetMe(); // Fetch user data using GetMe
   const router = useRouter();
   const [isProcessing, setIsProcessing] = useState(false);
@@ -58,7 +60,7 @@ const CoursesPage = ({ params }: { params: { contact: string } }) => {
  const deletePreviousBooking = async () => {
   try {
     await axios.delete(
-      `${API_BASE}/api/v1/bookings/${params.contact}`
+      `${API_BASE}/api/v1/bookings/${contact}`
     );
   } catch (error) {
     console.error("Error deleting previous booking:", error);
@@ -127,6 +129,7 @@ const handleConfirmation = async (newBookingDetails: any) => {
         <ul className="list-disc list-inside ml-4 sm:ml-6">
           <li className="mb-2 sm:mb-4">
             <strong>Test Date and Time:</strong> Check the exact schedule of your mock test from the <span>&nbsp;</span>
+            {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/dashboard" className="text-[#FACE39] underline text-lg">Dashboard</a>.
           </li>
           <li className="mb-2 sm:mb-4"><strong>Venue Information:</strong> Level 12, Gawsia Twin Peak, 743 Satmasjid Road, Dhanmondi 9/A, Dhaka-1205, Bangladesh.</li>
