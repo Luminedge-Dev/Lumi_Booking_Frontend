@@ -1,59 +1,17 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { use, useState, useEffect } from "react";
-import toast from "react-hot-toast";
-import GetMe from "@/hooks/useUser";
+import { useState, useEffect } from "react";
 
-const CoursesPage = ({ params: paramsPromise }: { params: Promise<{ contact: string[] }> }) => {
-  const params = use(paramsPromise);
-  const user = GetMe();
-  const { contact: bookingId } = params || {};
-  const router = useRouter();
+// Route: /dashboard/<bookingId> — the confirmation screen shown after a new
+// booking. FIX-02c removed the student reschedule action, so the catch-all
+// segment is intentionally not read any more: the page is informational only
+// and offers no control that could mutate a booking.
+const CoursesPage = () => {
   const [isMobile, setIsMobile] = useState<boolean | null>(null);
 
   useEffect(() => {
     setIsMobile(window.innerWidth <= 768);
   }, []);
-
-
-  const handleRescheduleClick = () => {
-    toast((t) => (
-      <div className="flex flex-col space-y-4 p-4 rounded-2xl font-[Montserrat] text-[#00000f] bg-white shadow-lg">
-        <span className="font-bold text-lg text-center">
-          Are you sure you want to reschedule?
-        </span>
-        <div className="flex justify-center gap-6">
-          <button
-            onClick={() => {
-              toast.dismiss(t.id);
-              router.push(`/dashboard/mockType?oldBookingId=${bookingId}`);
-            }}
-            className="px-5 py-2 rounded-full bg-green-600 hover:bg-green-700 text-white font-semibold transition-all duration-200 shadow-md font-[Montserrat]"
-          >
-            Confirm
-          </button>
-          <button
-            onClick={() => toast.dismiss(t.id)}
-            className="px-5 py-2 rounded-full bg-red-600 hover:bg-red-700 text-white font-semibold transition-all duration-200 shadow-md font-[Montserrat]"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    ), {
-      duration: 5000,
-      style: {
-        background: "transparent",
-        border: "none",
-        padding: "0",
-        boxShadow: "none",
-        fontFamily: "Montserrat, sans-serif",
-        color: "#00000f",
-      },
-    });
-  };
-  
 
   return (
     <div className="flex flex-col items-center w-full max-w-screen-xl mx-auto space-y-4 px-0 sm:px-0 md:px-0">
@@ -126,13 +84,10 @@ const CoursesPage = ({ params: paramsPromise }: { params: Promise<{ contact: str
     </li>
   </ul>
   <div className="flex justify-center mt-4">
-  <button
-            onClick={handleRescheduleClick}
-            className="px-5 py-3 bg-[#FACE39] text-[#00000f] font-semibold rounded-lg hover:bg-yellow-500 transition duration-200"
-          >
-            Reschedule
-          </button>
-      </div>
+    <p className="text-center font-semibold">
+      To reschedule, please contact the front desk at least 24 hours before your test.
+    </p>
+  </div>
 </div>
         {/* Key Reminders */}
         <div className="w-full max-w-5xl bg-transparent p-0 sm:p-0">

@@ -1,120 +1,11 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import toast from "react-hot-toast";
-import axios from "axios";
-import { API_BASE } from "@/lib/config";
-import GetMe from "@/hooks/useUser";
-
-const CoursesPage = ({ params }: { params?: Promise<Record<string, never>> }) => {
-  // Pre-existing: this is a static route, so `contact` is always undefined here.
-  const contact = (params as unknown as { contact?: string } | undefined)?.contact;
-  const user = GetMe(); // Fetch user data using GetMe
-  const router = useRouter();
-  const [isProcessing, setIsProcessing] = useState(false);
-  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768; // Check if window is available and determine if it's mobile
-
-  const isPast24Hours = (bookingDate: any, startTime: any) => {
-    const bookingDateTime = new Date(`${bookingDate}T${startTime}`);
-    const currentTime = new Date();
-    const timeDifference = bookingDateTime.getTime() - currentTime.getTime();
-    return timeDifference > 24 * 60 * 60 * 1000; // More than 24 hours remaining
-  };
-  
-  // // Function to handle booking reschedule
-  // const onRescheduleBooking = async (userId: string) => {
-  //   if (!userId) {
-  //     toast.error("User ID not found.");
-  //     return;
-  //   }
-
-  //   try {
-  //     setIsProcessing(true);
-
-  //     // Delete the current booking
-  //     await axios.delete(
-  //       `${API_BASE}/api/v1/bookings/${params.contact}`
-  //     );
-
-  //     toast((t) => {
-  //       setTimeout(() => toast.dismiss(t.id), 3000); // Auto-dismiss after 1 second
-  //       return <p>Booking rescheduled successfully!</p>;
-  //     });
-
-  //     // Redirect after successful operation
-  //     router.push("/dashboard/mockType");
-  //   } catch (error) {
-  //     if (axios.isAxiosError(error) && error.response?.status === 404) {
-  //       toast.error("Booking not found. Please try again.");
-  //     } else {
-  //       toast.error("An unexpected error occurred. Please try again.");
-  //     }
-  //     console.error("Error rescheduling booking:", error);
-  //   } finally {
-  //     setIsProcessing(false);
-  //   }
-  // };
-
- // Function to delete the previous booking
- const deletePreviousBooking = async () => {
-  try {
-    await axios.delete(
-      `${API_BASE}/api/v1/bookings/${contact}`
-    );
-  } catch (error) {
-    console.error("Error deleting previous booking:", error);
-    if (axios.isAxiosError(error) && error.response?.status === 404) {
-      toast.error("Previous booking not found.");
-    } else {
-      toast.error("An error occurred while deleting the booking.");
-    }
-  }
-};
-
-// Function to proceed with the new booking
-const proceedWithNewBooking = async (newBookingDetails: any) => {
-  try {
-    // Assume `newBookingDetails` contains the details of the new slot selected by the user.
-    await axios.post(
-      `${API_BASE}/api/v1/bookings`,
-      newBookingDetails
-    );
-
-    toast.success("New slot booked successfully!", {
-      duration: 3000 // Auto-dismiss after 3 seconds
-    });
-
-    router.push("/dashboard"); // Redirect to dashboard after booking
-  } catch (error) {
-    console.error("Now. please book new slot.", error);
-    toast((t) => {
-      setTimeout(() => toast.dismiss(t.id), 5000); // Auto-dismiss after 5 seconds
-      return (
-        <div className="flex items-center">
-          <span className="text-red-500 mr-2">⚠️</span>
-          <p>Please book new slot first.</p>
-        </div>
-      );
-    });
-  }
-};
-
-// Function to handle confirmation and processing logic
-const handleConfirmation = async (newBookingDetails: any) => {
-  setIsProcessing(true);
-  try {
-    // Perform deletion and booking in parallel
-    await Promise.all([
-      deletePreviousBooking(),
-      proceedWithNewBooking(newBookingDetails),
-    ]);
-  } catch (error) {
-    console.error("Error during booking process:", error);
-  } finally {
-    setIsProcessing(false);
-  }
-};
+// Static confirmation/policy screen reached from the student booking table.
+// FIX-02c: this page must not offer a student reschedule action. The previous
+// implementation kept a "Reschedule" button wired to a booking DELETE plus a
+// "book replacement" flow, which could cancel a booking without rebooking it.
+const CoursesPage = () => {
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
 
   return (
     <div className="flex flex-col items-center w-full max-w-screen-xl mx-auto space-y-4 px-2 sm:px-4 md:px-8">
@@ -187,45 +78,9 @@ const handleConfirmation = async (newBookingDetails: any) => {
     </li>
   </ul>
   <div className="flex justify-center mt-4 sm:mt-6">
-    <button
-      disabled
-      onClick={() => {
-        router.push("/dashboard/mockType");
-        toast((t) => (
-          <div>
-            <p className="mb-2">
-              If you wish to delete and reschedule your slot, please click &apos;Confirm&apos; and proceed to book a new slot.
-            </p>
-            <div className="flex justify-center space-x-2">
-              {/* <button
-                onClick={() => {
-                  const newBookingDetails = {
-                    userId: user?._id,
-                    newSlot: "2024-12-20T15:30", // Example new slot data
-                  };
-
-                  handleConfirmation(newBookingDetails);
-                  toast.dismiss(t.id); // Dismiss toast
-                }}
-                disabled={isProcessing}
-                className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
-              >
-                {isProcessing ? "Processing..." : "Confirm"}
-              </button>
-              <button
-                onClick={() => toast.dismiss(t.id)}
-                className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded"
-              >
-                Cancel
-              </button> */}
-            </div>
-          </div>
-        ));
-      }}
-      className="px-4 sm:px-6 py-2 sm:py-3 bg-[#FACE39] text-white font-semibold rounded-lg hover:bg-yellow-500 transition duration-200"
-    >
-      Reschedule
-    </button>
+    <p className="text-center font-semibold">
+      To reschedule, please contact the front desk at least 24 hours before your test.
+    </p>
   </div>
 </div>
         {/* Key Reminders */}
