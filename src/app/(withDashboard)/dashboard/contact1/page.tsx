@@ -23,7 +23,7 @@ const CoursesPage = () => {
             {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
             <a href="/dashboard" className="text-[#FACE39] underline text-lg">Dashboard</a>.
           </li>
-          <li className="mb-2 sm:mb-4"><strong>Venue Information:</strong> Level 12, Gawsia Twin Peak, 743 Satmasjid Road, Dhanmondi 9/A, Dhaka-1205, Bangladesh.</li>
+          <li className="mb-2 sm:mb-4"><strong>Venue Information:</strong> Check the venue listed in your booking details on the Dashboard.</li>
           <li className="mb-2 sm:mb-4"><strong>Required Documents:</strong> Ensure you have the correct identification (NID/ Passport) ready for test day.</li>
         </ul>
       
@@ -48,7 +48,7 @@ const CoursesPage = () => {
               <strong>Reporting Time:</strong>
               <ul className="list-disc list-inside ml-4 sm:ml-6 mt-1 sm:mt-2">
                 <li>
-                  Arrive at the Luminedge office at least 30 minutes before your scheduled mock test.
+                  Arrive at the venue listed in your booking details at least 30 minutes before your scheduled mock test.
                 </li>
                 <li>
                   Being late or failing to appear will be treated as if the test has already been taken, and no refunds or rescheduling will be allowed.
@@ -106,13 +106,13 @@ const CoursesPage = () => {
             <div className="p-4 border rounded-lg shadow-md">
               <h2 className="text-lg font-semibold mb-2">Address</h2>
               <p>
-                Level 12, Gawsia Twin Peak, 743 Satmasjid Road, Dhanmondi, Dhaka,
-                Bangladesh, 1205
+                42 Satmasjid Road, Dhanmondi
               </p>
             </div>
 
             <div className="p-4 border rounded-lg shadow-md">
               <h2 className="text-lg font-semibold mb-2">Telephone</h2>
+              <p>01400-403485</p>
               <p>01400-403474</p>
               <p>01400-403475</p>
               <p>01400-403486</p>
